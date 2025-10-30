@@ -129,10 +129,17 @@ create_safe_openclash_symlink() {
 }
 create_safe_openclash_symlink
 
+# === ENABLE OPENCLASH AT BOOT ===
+if [ -x /etc/init.d/openclash ]; then
+  /etc/init.d/openclash enable
+  echo "[✓] OpenClash di-enable agar otomatis start saat boot"
+  log_message "OpenClash service di-enable untuk start otomatis"
+fi
+
 # === RESTART OPENCLASH ===
 echo "[✔] Restarting OpenClash..."
 log_message "Restarting OpenClash service"
-/etc/init.d/openclash start && echo "[✓] OpenClash berhasil direstart" && log_message "OpenClash restart sukses" || { 
+/etc/init.d/openclash restart && echo "[✓] OpenClash berhasil direstart" && log_message "OpenClash restart sukses" || { 
   echo "[✘] Gagal merestart OpenClash"; 
   log_message "Gagal merestart OpenClash"; 
 }
