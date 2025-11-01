@@ -1,12 +1,12 @@
-name: Unpack IMG.GZ (MediaFire support)
+name: Unpack IMG (MediaFire + multi-format support)
 
 on:
   workflow_dispatch:
     inputs:
       mediafire_url:
-        description: "URL file .img.gz di MediaFire"
+        description: "URL file (.img.gz / .img.xz / .img.7z) di MediaFire"
         required: true
-        default: "https://www.mediafire.com/file/xxxxxx/firmware.img.gz/file"
+        default: "https://www.mediafire.com/file/xxxxxx/firmware.img.xz/file"
       output_name:
         description: "Nama prefix hasil ekstraksi"
         required: false
@@ -14,13 +14,13 @@ on:
       release_tag:
         description: "Tag release untuk upload hasil"
         required: false
-        default: "unpack-mediafire"
+        default: "unpack-auto"
 
 jobs:
   unpack:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # diperlukan untuk upload ke release
+      contents: write  # dibutuhkan untuk upload ke Release
 
     steps:
       - name: Checkout Repository
@@ -29,15 +29,14 @@ jobs:
       - name: Install required tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl p7zip-full kpartx util-linux mount parted zip jq
+          sudo apt-get install -y curl xz-utils p7zip-full kpartx util-linux mount parted zip jq
 
       - name: Resolve MediaFire direct link
         id: resolve
         run: |
           echo "🔍 Resolving MediaFire link..."
           URL="${{ inputs.mediafire_url }}"
-          # Ambil URL download langsung dari halaman HTML
-          DIRECT=$(curl -sL "$URL" | grep -oE 'https://download[^"]+')
+          DIRECT=$(curl -sL "$URL" | grep -oE 'https://download[^"]+' | head -n1)
           if [ -z "$DIRECT" ]; then
             echo "❌ Tidak bisa mendapatkan direct link dari MediaFire"
             exit 1
@@ -45,22 +44,38 @@ jobs:
           echo "✅ Direct link: $DIRECT"
           echo "direct_url=$DIRECT" >> $GITHUB_OUTPUT
 
-      - name: Download .img.gz
+      - name: Download compressed image
         run: |
-          echo "🔽 Downloading from MediaFire..."
-          curl -L -o "${{ inputs.output_name }}.img.gz" "${{ steps.resolve.outputs.direct_url }}"
-          ls -lh "${{ inputs.output_name }}.img.gz"
+          echo "🔽 Downloading image..."
+          curl -L -o "firmware.img.download" "${{ steps.resolve.outputs.direct_url }}"
+          echo "📦 File hasil unduhan:"
+          ls -lh
 
-      - name: Extract .img.gz
+          # Tentukan nama dan format file
+          EXT=$(file firmware.img.download | grep -Eo 'XZ|gzip|7-zip' | head -n1 | tr 'A-Z' 'a-z')
+          case "$EXT" in
+            xz) mv firmware.img.download "${{ inputs.output_name }}.img.xz" ;;
+            gzip) mv firmware.img.download "${{ inputs.output_name }}.img.gz" ;;
+            7-zip) mv firmware.img.download "${{ inputs.output_name }}.img.7z" ;;
+            *) echo "❌ Format tidak dikenali ($EXT)"; exit 1 ;;
+          esac
+
+      - name: Extract image (.gz / .xz / .7z)
         run: |
-          echo "📦 Extracting..."
-          gunzip -v "${{ inputs.output_name }}.img.gz"
+          FILE=$(ls *.img.* | head -n1)
+          echo "📦 Extracting $FILE..."
+          case "$FILE" in
+            *.gz) gunzip -v "$FILE" ;;
+            *.xz) xz -d -v "$FILE" ;;
+            *.7z) 7z x "$FILE" ;;
+            *) echo "❌ Format tidak dikenali."; exit 1 ;;
+          esac
           ls -lh
 
       - name: Split image into boot and rootfs
         run: |
           set -e
-          IMG="${{ inputs.output_name }}.img"
+          IMG=$(ls *.img | head -n1)
           mkdir -p boot rootfs mnt
 
           echo "🧩 Setting up loop device..."
@@ -70,23 +85,29 @@ jobs:
           echo "🔍 Listing partitions..."
           sudo fdisk -l "$LOOP" || true
 
-          echo "📂 Mounting partitions..."
-          # Boot
-          sudo mount "${LOOP}p1" mnt || true
-          if [ -d mnt/boot ]; then
-            cp -a mnt/boot/* boot/ || true
+          # --- Partisi 1: boot ---
+          if sudo mount "${LOOP}p1" mnt 2>/dev/null; then
+            if [ -d mnt/boot ]; then
+              cp -a mnt/boot/* boot/ || true
+            else
+              cp -a mnt/* boot/ || true
+            fi
+            sudo umount mnt
           else
-            cp -a mnt/* boot/ || true
+            echo "⚠️ Tidak ada partisi boot (p1)"
           fi
-          sudo umount mnt || true
 
-          # Rootfs
-          sudo mount "${LOOP}p2" mnt || true
-          cp -a mnt/* rootfs/ || true
-          sudo umount mnt
+          # --- Partisi 2: rootfs ---
+          if sudo mount "${LOOP}p2" mnt 2>/dev/null; then
+            cp -a mnt/* rootfs/ || true
+            sudo umount mnt
+          else
+            echo "⚠️ Tidak ada partisi rootfs (p2)"
+          fi
 
-          echo "🧹 Cleaning up..."
           sudo losetup -d "$LOOP"
+          echo "✅ Extraction done."
+          du -sh boot rootfs || true
 
       - name: Compress boot and rootfs
         run: |
