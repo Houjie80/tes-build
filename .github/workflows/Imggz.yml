@@ -29,7 +29,7 @@ jobs:
       - name: Install required tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl p7zip-full kpartx losetup mount parted zip jq
+          sudo apt-get install -y curl p7zip-full kpartx util-linux mount parted zip jq
 
       - name: Resolve MediaFire direct link
         id: resolve
