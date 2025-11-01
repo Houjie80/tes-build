@@ -1,12 +1,12 @@
-name: Unpack IMG.GZ into boot and rootfs, then upload to Release
+name: Unpack IMG.GZ (MediaFire support)
 
 on:
   workflow_dispatch:
     inputs:
-      img_gz_url:
-        description: "URL atau path file .img.gz"
+      mediafire_url:
+        description: "URL file .img.gz di MediaFire"
         required: true
-        default: "https://example.com/openwrt.img.gz"
+        default: "https://www.mediafire.com/file/xxxxxx/firmware.img.gz/file"
       output_name:
         description: "Nama prefix hasil ekstraksi"
         required: false
@@ -14,13 +14,13 @@ on:
       release_tag:
         description: "Tag release untuk upload hasil"
         required: false
-        default: "unpack-test"
+        default: "unpack-mediafire"
 
 jobs:
   unpack:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # agar bisa upload ke Release
+      contents: write  # diperlukan untuk upload ke release
 
     steps:
       - name: Checkout Repository
@@ -29,20 +29,35 @@ jobs:
       - name: Install required tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full kpartx losetup mount parted curl zip
+          sudo apt-get install -y curl p7zip-full kpartx losetup mount parted zip jq
+
+      - name: Resolve MediaFire direct link
+        id: resolve
+        run: |
+          echo "🔍 Resolving MediaFire link..."
+          URL="${{ inputs.mediafire_url }}"
+          # Ambil URL download langsung dari halaman HTML
+          DIRECT=$(curl -sL "$URL" | grep -oE 'https://download[^"]+')
+          if [ -z "$DIRECT" ]; then
+            echo "❌ Tidak bisa mendapatkan direct link dari MediaFire"
+            exit 1
+          fi
+          echo "✅ Direct link: $DIRECT"
+          echo "direct_url=$DIRECT" >> $GITHUB_OUTPUT
 
       - name: Download .img.gz
         run: |
-          echo "🔽 Downloading ${{ inputs.img_gz_url }}"
-          curl -L -o "${{ inputs.output_name }}.img.gz" "${{ inputs.img_gz_url }}"
+          echo "🔽 Downloading from MediaFire..."
+          curl -L -o "${{ inputs.output_name }}.img.gz" "${{ steps.resolve.outputs.direct_url }}"
+          ls -lh "${{ inputs.output_name }}.img.gz"
 
       - name: Extract .img.gz
         run: |
-          echo "📦 Extracting ${{ inputs.output_name }}.img.gz..."
+          echo "📦 Extracting..."
           gunzip -v "${{ inputs.output_name }}.img.gz"
           ls -lh
 
-      - name: Split image into boot and rootfs folders
+      - name: Split image into boot and rootfs
         run: |
           set -e
           IMG="${{ inputs.output_name }}.img"
@@ -56,7 +71,7 @@ jobs:
           sudo fdisk -l "$LOOP" || true
 
           echo "📂 Mounting partitions..."
-          # Mount partisi 1 (boot)
+          # Boot
           sudo mount "${LOOP}p1" mnt || true
           if [ -d mnt/boot ]; then
             cp -a mnt/boot/* boot/ || true
@@ -65,18 +80,13 @@ jobs:
           fi
           sudo umount mnt || true
 
-          # Mount partisi 2 (rootfs)
+          # Rootfs
           sudo mount "${LOOP}p2" mnt || true
           cp -a mnt/* rootfs/ || true
           sudo umount mnt
 
           echo "🧹 Cleaning up..."
           sudo losetup -d "$LOOP"
-
-          echo "📦 Folder hasil ekstraksi:"
-          du -sh boot rootfs || true
-          ls -lh boot | head -n 10
-          ls -lh rootfs | head -n 10
 
       - name: Compress boot and rootfs
         run: |
@@ -85,7 +95,7 @@ jobs:
           zip -r "${{ inputs.output_name }}_rootfs.zip" rootfs
           ls -lh *.zip
 
-      - name: Upload boot and rootfs as artifacts
+      - name: Upload as artifact
         uses: actions/upload-artifact@v4
         with:
           name: unpacked-${{ inputs.output_name }}
