@@ -1,0 +1,104 @@
+name: Unpack IMG.GZ into boot and rootfs, then upload to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      img_gz_url:
+        description: "URL atau path file .img.gz"
+        required: true
+        default: "https://example.com/openwrt.img.gz"
+      output_name:
+        description: "Nama prefix hasil ekstraksi"
+        required: false
+        default: "openwrt"
+      release_tag:
+        description: "Tag release untuk upload hasil"
+        required: false
+        default: "unpack-test"
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # agar bisa upload ke Release
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full kpartx losetup mount parted curl zip
+
+      - name: Download .img.gz
+        run: |
+          echo "🔽 Downloading ${{ inputs.img_gz_url }}"
+          curl -L -o "${{ inputs.output_name }}.img.gz" "${{ inputs.img_gz_url }}"
+
+      - name: Extract .img.gz
+        run: |
+          echo "📦 Extracting ${{ inputs.output_name }}.img.gz..."
+          gunzip -v "${{ inputs.output_name }}.img.gz"
+          ls -lh
+
+      - name: Split image into boot and rootfs folders
+        run: |
+          set -e
+          IMG="${{ inputs.output_name }}.img"
+          mkdir -p boot rootfs mnt
+
+          echo "🧩 Setting up loop device..."
+          LOOP=$(sudo losetup --show -Pf "$IMG")
+          echo "Using loop device: $LOOP"
+
+          echo "🔍 Listing partitions..."
+          sudo fdisk -l "$LOOP" || true
+
+          echo "📂 Mounting partitions..."
+          # Mount partisi 1 (boot)
+          sudo mount "${LOOP}p1" mnt || true
+          if [ -d mnt/boot ]; then
+            cp -a mnt/boot/* boot/ || true
+          else
+            cp -a mnt/* boot/ || true
+          fi
+          sudo umount mnt || true
+
+          # Mount partisi 2 (rootfs)
+          sudo mount "${LOOP}p2" mnt || true
+          cp -a mnt/* rootfs/ || true
+          sudo umount mnt
+
+          echo "🧹 Cleaning up..."
+          sudo losetup -d "$LOOP"
+
+          echo "📦 Folder hasil ekstraksi:"
+          du -sh boot rootfs || true
+          ls -lh boot | head -n 10
+          ls -lh rootfs | head -n 10
+
+      - name: Compress boot and rootfs
+        run: |
+          echo "🗜️ Compressing extracted folders..."
+          zip -r "${{ inputs.output_name }}_boot.zip" boot
+          zip -r "${{ inputs.output_name }}_rootfs.zip" rootfs
+          ls -lh *.zip
+
+      - name: Upload boot and rootfs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: unpacked-${{ inputs.output_name }}
+          path: |
+            ${{ inputs.output_name }}_boot.zip
+            ${{ inputs.output_name }}_rootfs.zip
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: |
+            ${{ inputs.output_name }}_boot.zip
+            ${{ inputs.output_name }}_rootfs.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
