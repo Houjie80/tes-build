@@ -1,0 +1,96 @@
+name: Extract or Decompile DTB
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_file:
+        description: "Nama file (dtb/img/bin) yang ingin dibongkar (misal: kernel.img atau board.dtb)"
+        required: true
+      mode:
+        description: "Pilih mode ekstraksi"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - extract_dtb
+          - decompile_dtb
+      release_tag:
+        description: "Tag release untuk upload hasil (misal: dtb-test)"
+        required: true
+        default: "dtb-extract"
+
+jobs:
+  extract-dtb:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup tools
+        run: |
+          sudo apt update
+          sudo apt install -y device-tree-compiler wget binwalk gzip
+
+      - name: Download input file
+        run: |
+          echo "🔹 Mencari file ${{ inputs.input_file }}"
+          if [ -f "${{ inputs.input_file }}" ]; then
+            echo "✅ File ditemukan di repo."
+          else
+            echo "❌ File tidak ditemukan di repo."
+            exit 1
+          fi
+
+      - name: Extract or decompile DTB
+        id: process
+        run: |
+          mkdir -p output
+          file="${{ inputs.input_file }}"
+          mode="${{ inputs.mode }}"
+          
+          echo "🔧 Mode: $mode"
+
+          # AUTO MODE: deteksi jenis file
+          if [ "$mode" = "auto" ]; then
+            if [[ "$file" == *.dtb ]]; then
+              mode="decompile_dtb"
+            else
+              mode="extract_dtb"
+            fi
+          fi
+
+          if [ "$mode" = "decompile_dtb" ]; then
+            echo "🧩 Decompile DTB ke DTS..."
+            base=$(basename "$file" .dtb)
+            dtc -I dtb -O dts -o "output/$base.dts" "$file"
+            echo "result_file=output/$base.dts" >> $GITHUB_OUTPUT
+          
+          elif [ "$mode" = "extract_dtb" ]; then
+            echo "📦 Ekstrak semua DTB dari image..."
+            cd output
+            extract-dtb "../$file" || binwalk --dd="DTB" "../$file"
+            cd ..
+            echo "result_file=output" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Compress results
+        run: |
+          echo "📁 Mengarsipkan hasil..."
+          cd output
+          zip -r ../dtb_result.zip ./*
+          cd ..
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: dtb_result.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Output info
+        run: |
+          echo "✅ Proses selesai."
+          echo "File hasil ada di release tag: ${{ inputs.release_tag }}"
