@@ -19,7 +19,7 @@ on:
         default: 'https://github.com/unifreq/linux-5.15.y.git'
         type: string
       driver_type:
-        description: 'Path sumber, pisahkan dengan koma jika banyak (contoh: drivers/net/wireless,fs/ntfs3)'
+        description: 'Path sumber, pisahkan dengan koma jika banyak (contoh: drivers/net/wireless,fs/ntfs3)jika seluruh (')'
         required: false
         default: ''
         type: string
