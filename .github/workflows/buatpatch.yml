@@ -1,0 +1,85 @@
+name: Auto Generate Patches From User & Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Repo sumber"
+        required: true
+        default: "https://github.com/tes-rep/linuxx.git"
+
+      source_branch:
+        description: "Branch sumber"
+        required: true
+        default: "main"
+
+      author_name:
+        description: "Nama author commit"
+        required: true
+        default: "tes-rep"
+
+      release_tag:
+        description: "Tag Release"
+        required: true
+        default: "auto-patch"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo kamu
+        uses: actions/checkout@v4
+
+      - name: Clone source repo
+        run: |
+          git clone ${{ github.event.inputs.source_repo }} source_repo
+          cd source_repo
+          git checkout ${{ github.event.inputs.source_branch }}
+          git fetch --all
+
+      - name: Generate patches
+        run: |
+          mkdir -p patches
+          cd source_repo
+
+          COMMITS=$(git log --author="${{ github.event.inputs.author_name }}" --pretty=format:"%H")
+
+          echo "Commit ditemukan:"
+          echo "$COMMITS"
+
+          for C in $COMMITS; do
+            echo "Membuat patch untuk commit: $C"
+            git format-patch -1 "$C" -o ../patches/
+          done
+
+      - name: List patches
+        run: |
+          echo "Patch yang dihasilkan:"
+          ls -lah patches
+
+      # 🔥 Step ini: OTOMATIS membuat release jika belum ada
+      - name: Create Release if not exists
+        id: create_release
+        run: |
+          TAG=${{ github.event.inputs.release_tag }}
+
+          # Cek apakah release sudah ada
+          EXISTS=$(gh release view "$TAG" --json tagName --jq .tagName 2>/dev/null || echo "none")
+
+          if [ "$EXISTS" = "none" ]; then
+            echo "Release $TAG belum ada → membuat release baru"
+            gh release create "$TAG" -t "$TAG" -n "Automatic Patch Release"
+          else
+            echo "Release $TAG sudah ada → lanjut upload ke release"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload patches to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          files: patches/*.patch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
